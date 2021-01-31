@@ -2,14 +2,21 @@ import sys
 import logging
 import smbus
 import time                            # noqa
+import RPi.GPIO as GPIO                # noqa
 from ctypes import c_short             # noqa
 from ctypes import c_byte              # noqa
 from ctypes import c_ubyte             # noqa
 
+from lcd import lcd_string
+from lcd import LCD_LINE_1
+from lcd import LCD_LINE_2
+from lcd import LCD_CMD
+from lcd import lcd_byte
 logger = logging.getLogger(__name__)
 
 '''
-Default device I2C address
+Default device I2C address, found with the command:
+i2cdetect -y 1
 '''
 DEVICE = 0x77
 
@@ -57,6 +64,9 @@ def getUChar(data, index):
 
 
 def readBME280ID(addr=DEVICE):
+    '''
+    Let the sensor tell about itself
+    '''
     REG_ID = 0xD0
     (chip_id, chip_version) = bus.read_i2c_block_data(addr, REG_ID, 2)
     return (chip_id, chip_version)
@@ -66,11 +76,7 @@ def readBME280All(addr=DEVICE):
     # Register Addresses
     REG_DATA = 0xF7
     REG_CONTROL = 0xF4
-    REG_CONFIG  = 0xF5
-
     REG_CONTROL_HUM = 0xF2
-    REG_HUM_MSB = 0xFD
-    REG_HUM_LSB = 0xFE
 
     # Oversample setting - page 27
     OVERSAMPLE_TEMP = 2
@@ -81,7 +87,7 @@ def readBME280All(addr=DEVICE):
     OVERSAMPLE_HUM = 2
     bus.write_byte_data(addr, REG_CONTROL_HUM, OVERSAMPLE_HUM)
 
-    control = OVERSAMPLE_TEMP<<5 | OVERSAMPLE_PRES<<2 | MODE
+    control = OVERSAMPLE_TEMP << 5 | OVERSAMPLE_PRES << 2 | MODE
     bus.write_byte_data(addr, REG_CONTROL, control)
 
     # Read blocks of calibration data from EEPROM
@@ -129,11 +135,11 @@ def readBME280All(addr=DEVICE):
     temp_raw = (data[3] << 12) | (data[4] << 4) | (data[5] >> 4)
     hum_raw = (data[6] << 8) | data[7]
 
-    #Refine temperature
-    var1 = ((((temp_raw>>3)-(dig_T1<<1)))*(dig_T2)) >> 11
-    var2 = (((((temp_raw>>4) - (dig_T1)) * ((temp_raw>>4) - (dig_T1))) >> 12) * (dig_T3)) >> 14
+    # Refine temperature
+    var1 = ((((temp_raw >> 3) - (dig_T1 << 1))) * (dig_T2)) >> 11
+    var2 = (((((temp_raw >> 4) - (dig_T1)) * ((temp_raw >> 4) - (dig_T1))) >> 12) * (dig_T3)) >> 14
     t_fine = var1+var2
-    temperature = float(((t_fine * 5) + 128) >> 8);
+    temperature = float(((t_fine * 5) + 128) >> 8)
 
     # Refine pressure and adjust for temperature
     var1 = t_fine / 2.0 - 64000.0
@@ -143,7 +149,7 @@ def readBME280All(addr=DEVICE):
     var1 = (dig_P3 * var1 * var1 / 524288.0 + dig_P2 * var1) / 524288.0
     var1 = (1.0 + var1 / 32768.0) * dig_P1
     if var1 == 0:
-        pressure=0
+        pressure = 0
     else:
         pressure = 1048576.0 - pres_raw
         pressure = ((pressure - var2 / 4096.0) * 6250.0) / var1
@@ -180,7 +186,25 @@ if __name__ == '__main__':
     logger.info('chip_id=%s', chip_id)
     logger.info('chip_version=%s', chip_version)
 
-    while True:
-        t, p, h = readBME280All()
-        logger.info('temperature=%s F | pressure=%s inHg | humidity=%s %%', t, p, h)
-        time.sleep(60)
+    try:
+        while True:
+            t, p, h = readBME280All()
+            logger.info('temperature=%s F | pressure=%s inHg | humidity=%s %%', t, p, h)
+
+            lcd_string('Temperature:', LCD_LINE_1)
+            lcd_string(f'  {t} F', LCD_LINE_2)
+            time.sleep(2)
+
+            lcd_string('Pressure:', LCD_LINE_1)
+            lcd_string(f'  {p} inHg', LCD_LINE_2)
+            time.sleep(2)
+
+            lcd_string('Humidity:', LCD_LINE_1)
+            lcd_string(f'  {h} %', LCD_LINE_2)
+            time.sleep(2)
+    except KeyboardInterrupt:
+        print()
+        logger.info('Ctrl-C mashed')
+    finally:
+        lcd_byte(0x01, LCD_CMD)
+        GPIO.cleanup()
